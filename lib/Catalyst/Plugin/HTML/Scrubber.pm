@@ -36,19 +36,39 @@ sub prepare_parameters {
 
     my $conf = $c->config->{scrubber};
     if (ref $conf ne 'HASH' || $conf->{auto}) {
-        $c->html_scrub;
+        $c->html_scrub($conf || {});
     }
 }
 
 sub html_scrub {
-    my $c = shift;
+    my ($c, $conf) = @_;
 
-    for my $value (values %{$c->request->{parameters}}) {
-        if (ref $value && ref $value ne 'ARRAY') {
-            next;
+    param:
+    for my $param (keys %{ $c->request->{parameters} }) {
+        #while (my ($param, $value) = each %{ $c->request->{parameters} }) {
+        my $value = \$c->request->{parameters}{$param};
+        if (ref $$value && ref $$value ne 'ARRAY') {
+            next param;
         }
 
-        $_ = $c->_scrubber->scrub($_) for (ref($value) ? @{$value} : $value);
+        # If we only want to operate on certain params, do that checking
+        # now...
+        if ($conf && $conf->{ignore_params}) {
+            my $ignore_params = $c->config->{scrubber}{ignore_params};
+            if (ref $ignore_params ne 'ARRAY') {
+                $ignore_params = [ $ignore_params ];
+            }
+            for my $ignore_param (@$ignore_params) {
+                if (ref $ignore_param eq 'Regexp') {
+                    next param if $param =~ $ignore_param;
+                } else {
+                    next param if $param eq $ignore_param;
+                }
+            }
+        } 
+
+        # If we're still here, we want to scrub this param's value.
+        $_ = $c->_scrubber->scrub($_) for (ref($$value) ? @{$$value} : $$value);
     }
 }
 
@@ -60,25 +80,34 @@ __END__
 
 =head1 NAME
 
-Catalyst::Plugin::HTML::Scrubber - Catalyst plugin for scrubbing/sanitizing html
+Catalyst::Plugin::HTML::Scrubber - Catalyst plugin for scrubbing/sanitizing incoming parameters
 
 =head1 SYNOPSIS
 
     use Catalyst qw[HTML::Scrubber];
 
     MyApp->config( 
-        scrubber => [
-            default => 0,
-            comment => 0,
-            script => 0,
-            process => 0,
-            allow => [qw [ br hr b a h1]],
-        ],
+        scrubber => {
+            auto => 1,  # automatically run on request
+            ignore_params => [ qr/_html$/, 'article_body' ],
+            
+            # The following are options to HTML::Scrubber
+            params => [
+                default => 0,
+                comment => 0,
+                script => 0,
+                process => 0,
+                allow => [qw [ br hr b a h1]],
+            ],
+        },
    );
 
 =head1 DESCRIPTION
 
-On request, sanitize HTML tags in all params.
+On request, sanitize HTML tags in all params (with the ability to exempt
+some if needed), to protect against XSS (cross-site scripting) attacks and
+other unwanted things.
+
 
 =head1 EXTENDED METHODS
 
@@ -86,11 +115,14 @@ On request, sanitize HTML tags in all params.
 
 =item setup
 
-You can use options of L<HTML::Scrubber>.
+See SYNOPSIS for how to configure the plugin, both with its own configuration
+(e.g. whether to automatically run, whether to exempt certain fields) and
+passing on any options from L<HTML::Scrubber> to control exactly what
+scrubbing happens.
 
 =item prepare_parameters
 
-Sanitize HTML tags in all parameters.
+Sanitize HTML tags in all parameters (unless `ignore_params` exempts them).
 
 =back
 
